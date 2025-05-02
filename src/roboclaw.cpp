@@ -27,7 +27,6 @@
 #include "roboclaw_cmd_read_temperature.h"
 #include "roboclaw_cmd_set_encoder_value.h"
 #include "roboclaw_cmd_set_pid.h"
-#include "ros2_roboclaw_driver/srv/reset_encoders.h"
 
 const char *RoboClaw::motorNames_[] = {"M1", "M2", "NONE"};
 
