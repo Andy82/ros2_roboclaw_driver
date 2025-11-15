@@ -67,7 +67,7 @@ class RoboClaw {
 
   // Holds RoboClaw encoder result.
   typedef struct {
-    int32_t value;
+    uint32_t value;
     uint8_t status;
   } EncodeResult;
 
@@ -100,7 +100,7 @@ class RoboClaw {
                              uint32_t m2_max_distance);
 
   // Get RoboClaw error status bits.
-  uint16_t getErrorStatus();
+  uint32_t getErrorStatus();
 
   // Get RoboClaw error status as a string.
   std::string getErrorString();
@@ -114,14 +114,14 @@ class RoboClaw {
   float getMainBatteryLevel();
 
   // Get the encoder value for motor 1.
-  int32_t getM1Encoder();
+  uint32_t getM1Encoder();
 
   // Get the status of the encoder for motor 1.
   // 0 = no error, 1 = encoder command error, 2 = encoder not found.
   int8_t getM1EncoderStatus();
 
   // Get the encoder value for motor 2.
-  int32_t getM2Encoder();
+  uint32_t getM2Encoder();
 
   // Get the status of the encoder for motor 2.
   // 0 = no error, 1 = encoder command error, 2 = encoder not found.
@@ -178,7 +178,7 @@ class RoboClaw {
   bool do_low_level_debug_;
 
   // Get RoboClaw error status as a string.
-  std::string getErrorString(uint16_t errorStatus);
+  std::string getErrorString(uint32_t errorStatus);
 
   // Various values are periodically read from the RoboClaw as a group and
   // stored in this structure. Clients wanting these values will get the latest,
@@ -189,7 +189,7 @@ class RoboClaw {
   // method and can be accessed by clients using the g_sensor_value_group_
   // structure.
   typedef struct {
-    uint16_t error_status;
+    uint32_t error_status; // now 32-bit per updated RoboClaw manual
     std::string error_string;
     float logic_battery_level;
     EncodeResult m1_encoder_command_result;
