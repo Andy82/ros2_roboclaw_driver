@@ -50,6 +50,8 @@ class MotorDriver : public rclcpp::Node {
   bool publish_joint_states_;
   bool publish_odom_;
   int quad_pulses_per_meter_;
+  int m1_quad_pulses_per_meter_;
+  int m2_quad_pulses_per_meter_;
   float quad_pulses_per_revolution_;
   float sensor_update_rate_;  // Hz
   float wheel_radius_;

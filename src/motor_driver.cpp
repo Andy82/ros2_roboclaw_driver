@@ -46,6 +46,8 @@ void MotorDriver::declareParameters() {
   this->declare_parameter<bool>("publish_joint_states", true);
   this->declare_parameter<bool>("publish_odom", true);
   this->declare_parameter<int>("quad_pulses_per_meter", 0);
+  this->declare_parameter<int>("m1_quad_pulses_per_meter", 0);
+  this->declare_parameter<int>("m2_quad_pulses_per_meter", 0);
   this->declare_parameter<float>("quad_pulses_per_revolution", 0);
   this->declare_parameter<float>("sensor_update_rate", 20.0);  // Hz
   this->declare_parameter<float>("wheel_radius", 0.0);
@@ -77,6 +79,8 @@ void MotorDriver::initializeParameters() {
   this->get_parameter("publish_joint_states", publish_joint_states_);
   this->get_parameter("publish_odom", publish_odom_);
   this->get_parameter("quad_pulses_per_meter", quad_pulses_per_meter_);
+  this->get_parameter("m1_quad_pulses_per_meter", m1_quad_pulses_per_meter_);
+  this->get_parameter("m2_quad_pulses_per_meter", m2_quad_pulses_per_meter_);
   this->get_parameter("quad_pulses_per_revolution",
                       quad_pulses_per_revolution_);
   this->get_parameter("sensor_update_rate", sensor_update_rate_);
@@ -113,6 +117,8 @@ void MotorDriver::logParameters() const {
                    publish_joint_states_ ? "True" : "False");
   RCUTILS_LOG_INFO("publish_odom: %s", publish_odom_ ? "True" : "False");
   RCUTILS_LOG_INFO("quad_pulses_per_meter: %d", quad_pulses_per_meter_);
+  RCUTILS_LOG_INFO("m1_quad_pulses_per_meter: %d", m1_quad_pulses_per_meter_);
+  RCUTILS_LOG_INFO("m2_quad_pulses_per_meter: %d", m2_quad_pulses_per_meter_);
   RCUTILS_LOG_INFO("quad_pulses_per_revolution: %3.4f",
                    quad_pulses_per_revolution_);
   RCUTILS_LOG_INFO("sensor_update_rate: %f", sensor_update_rate_);
@@ -228,23 +234,30 @@ void MotorDriver::publisherThread() {
       sensor_msgs::msg::JointState joint_state_msg;
 
       odometry_msg.header.stamp = clock->now();
-      odometry_msg.header.frame_id = "base_link";
+      // Use standard frames for odom -> base_link
+      odometry_msg.header.frame_id = "odom";
+      odometry_msg.child_frame_id = "base_link";
 
       joint_state_msg.header.stamp = clock->now();
       joint_state_msg.header.frame_id = "base_link";
 
       if (g_singleton->publish_joint_states_) {
-        float encoder_left = RoboClaw::singleton()->getM1Encoder() * 1.0;
-        float encoder_right = RoboClaw::singleton()->getM2Encoder() * 1.0;
+        float encoder_left = RoboClaw::singleton()->getM2Encoder() * 1.0;
+        float encoder_right = RoboClaw::singleton()->getM1Encoder() * 1.0;
         double radians_left =
             ((encoder_left * 1.0) / g_singleton->quad_pulses_per_revolution_) *
             2.0 * M_PI;
         double radians_right =
             ((encoder_right * 1.0) / g_singleton->quad_pulses_per_revolution_) *
             2.0 * M_PI;
-        joint_state_msg.name.push_back("front_left_wheel");
-        joint_state_msg.name.push_back("front_right_wheel");
+        // Publish joint positions for all four wheel joints
+        joint_state_msg.name.push_back("lf_wheel_joint");
         joint_state_msg.position.push_back(radians_left);
+        joint_state_msg.name.push_back("lb_wheel_joint");
+        joint_state_msg.position.push_back(radians_left);
+        joint_state_msg.name.push_back("rf_wheel_joint");
+        joint_state_msg.position.push_back(radians_right);
+        joint_state_msg.name.push_back("rb_wheel_joint");
         joint_state_msg.position.push_back(radians_right);
         g_singleton->joint_state_publisher_->publish(joint_state_msg);
       }
@@ -254,17 +267,34 @@ void MotorDriver::publisherThread() {
         double dt = (now - last_time).seconds();
         last_time = now;
 
-        float linear_velocity_x =
-            RoboClaw::singleton()->getVelocity(RoboClaw::kM1) * 1.0;
-        float linear_velocity_y =
-            RoboClaw::singleton()->getVelocity(RoboClaw::kM2) * 1.0;
-        float angular_velocity_z = (linear_velocity_x - linear_velocity_y) /
-                                   g_singleton->wheel_separation_;
+        // Wheel linear speeds in m/s (convert from encoder pulses/sec)
+        const double ticks_per_meter_left =
+            std::max(1.0, static_cast<double>(
+                               g_singleton->m2_quad_pulses_per_meter_ > 0
+                                   ? g_singleton->m2_quad_pulses_per_meter_
+                                   : g_singleton->quad_pulses_per_meter_));
+        const double ticks_per_meter_right =
+            std::max(1.0, static_cast<double>(
+                               g_singleton->m1_quad_pulses_per_meter_ > 0
+                                   ? g_singleton->m1_quad_pulses_per_meter_
+                                   : g_singleton->quad_pulses_per_meter_));
+        // Note: M1 reports right wheel, M2 reports left wheel on this wiring
+        double v_left =
+            static_cast<double>(RoboClaw::singleton()->getVelocity(RoboClaw::kM2)) /
+            ticks_per_meter_left;
+        double v_right =
+            static_cast<double>(RoboClaw::singleton()->getVelocity(RoboClaw::kM1)) /
+            ticks_per_meter_right;
+
+        // Diff-drive body velocities
+        double linear_velocity_x = (v_left + v_right) * 0.5;
+        double angular_velocity_z = (v_left - v_right) /
+                                    g_singleton->wheel_separation_;
 
         // Calculate the robot's position and orientation
-        static float x_pos_(0.0);
-        static float y_pos_(0.0);
-        static float heading_(0.0);
+        static double x_pos_(0.0);
+        static double y_pos_(0.0);
+        static double heading_(0.0);
         static bool first_time = true;
         if (first_time) {
           first_time = false;
@@ -272,13 +302,11 @@ void MotorDriver::publisherThread() {
           y_pos_ = 0.0;
           heading_ = 0.0;
         }
-        float delta_heading = angular_velocity_z * dt;  // radians
-        float cos_h = cos(heading_);
-        float sin_h = sin(heading_);
-        float delta_x =
-            (linear_velocity_x * cos_h - linear_velocity_y * sin_h) * dt;  // m
-        float delta_y =
-            (linear_velocity_x * sin_h + linear_velocity_y * cos_h) * dt;  // m
+        double delta_heading = angular_velocity_z * dt;  // radians
+        double cos_h = cos(heading_);
+        double sin_h = sin(heading_);
+        double delta_x = linear_velocity_x * cos_h * dt;  // m
+        double delta_y = linear_velocity_x * sin_h * dt;  // m
         // calculate current position of the robot
         x_pos_ += delta_x;
         y_pos_ += delta_y;
@@ -302,7 +330,7 @@ void MotorDriver::publisherThread() {
         odometry_msg.pose.covariance[35] = 0.001;
 
         odometry_msg.twist.twist.linear.x = linear_velocity_x;
-        odometry_msg.twist.twist.linear.y = linear_velocity_y;
+        odometry_msg.twist.twist.linear.y = 0.0;
         odometry_msg.twist.twist.linear.z = 0.0;
         odometry_msg.twist.twist.angular.x = 0.0;
         odometry_msg.twist.twist.angular.y = 0.0;
